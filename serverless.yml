@@ -1,0 +1,110 @@
+service: realtime-counter
+
+provider:
+  name: aws
+  runtime: nodejs6.10
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "firehose:PutRecordBatch"
+      Resource: "*"
+    - Effect: "Allow"
+      Action:
+        - "athena:StartQueryExecution"
+      Resource: "*"
+    - Effect: "Allow"
+      Action:
+        - "s3:*"
+      Resource:
+        - "*"
+    - Effect: "Allow"
+      Action:
+        - "glue:*"
+      Resource:
+        - "*"
+
+functions:
+  collect:
+    handler: handler.collect
+    events:
+      - http:
+          path: /{proxy+}
+          method: any
+    memorySize: 512
+    timeout: 10
+
+  partitioner:
+    handler: partition.handler
+    events:
+      - schedule:
+          rate: cron(15 * * * ? *)
+    memorySize: 512
+    timeout: 60
+
+resources:
+  Resources:
+    LogFirehose:
+      Type: "AWS::KinesisFirehose::DeliveryStream"
+      Properties:
+        DeliveryStreamName: Firehose-${opt:stage}
+        DeliveryStreamType: DirectPut
+        ExtendedS3DestinationConfiguration:
+          BucketARN:
+            Fn::GetAtt:
+              - LogBucket
+              - Arn
+          BufferingHints:
+            SizeInMBs: 128
+            IntervalInSeconds: 60
+          CompressionFormat: GZIP
+          Prefix: "log/"
+          RoleARN:
+            Fn::GetAtt:
+              - LogFirehoseRole
+              - Arn
+
+    LogBucket:
+      Type: AWS::S3::Bucket
+
+    LogFirehoseRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: Firehose-${opt:stage}-Role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - firehose.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: S3-Access-Policy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - "s3:AbortMultipartUpload"
+                    - "s3:GetBucketLocation"
+                    - "s3:GetObject"
+                    - "s3:ListBucket"
+                    - "s3:ListBucketMultipartUploads"
+                    - "s3:PutObject"
+                  Resource:
+                    - Fn::Join:
+                      - "/"
+                      - - Fn::GetAtt:
+                          - LogBucket
+                          - Arn
+                        - "log/*"
+  Outputs:
+    LogFirehose:
+      Value:
+        Ref: LogFirehose
+    LogBucket:
+      Value:
+        Ref: LogBucket
+    LogFirehoseRole:
+      Value:
+        Ref: LogFirehoseRole
